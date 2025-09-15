@@ -91,6 +91,27 @@ const MaterialsView: React.FC = () => {
 
   return (
     <>
+      {loading ? (
+        <div className="flex-1 bg-gray-50 flex items-center justify-center">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+            <p className="mt-2 text-gray-600">Kraunami duomenys...</p>
+          </div>
+        </div>
+      ) : error ? (
+        <div className="flex-1 bg-gray-50 flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-red-600 text-xl mb-2">⚠️</div>
+            <p className="text-red-600 font-medium">{error}</p>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="mt-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              Bandyti dar kartą
+            </button>
+          </div>
+        </div>
+      ) : (
       <div className="flex-1 bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4">
@@ -98,7 +119,7 @@ const MaterialsView: React.FC = () => {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Medžiagų atsargos</h1>
             <p className="text-sm text-gray-500 mt-1">
-              {materials.length} {(searchTerm || filters.category.length > 0 || filters.suitableForCosmetics !== null || filters.suitableForSupplements !== null || filters.lowStock || filters.expired) ? `iš ${allMaterials.length}` : ''} medžiagos atsargose
+              {materials.length} {(searchTerm || filters.categories.length > 0 || filters.suppliers.length > 0 || filters.lowStock) ? `iš ${allMaterials.length}` : ''} medžiagos atsargose
             </p>
           </div>
           <div className="flex space-x-3">
@@ -360,6 +381,7 @@ const MaterialsView: React.FC = () => {
         </div>
       </div>
       </div>
+      )}
 
       {/* Material Form Modal */}
       {showForm && (

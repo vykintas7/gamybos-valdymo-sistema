@@ -220,18 +220,86 @@ export const useMaterials = () => {
     return results;
   };
 
+  // State for filtering and sorting
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortField, setSortField] = useState<'name' | 'sku' | 'category' | 'currentStock' | 'createdAt'>('name');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [filters, setFilters] = useState<any>({
+    categories: [],
+    suppliers: [],
+    lowStock: false
+  });
+
+  // Get unique categories
+  const categories = useMemo(() => {
+    const uniqueCategories = [...new Set(materials.map(m => m.category))];
+    return uniqueCategories.sort();
+  }, [materials]);
+
   // Filtering and sorting logic
   const filteredAndSortedMaterials = useMemo(() => {
-    return materials; // For now, return all materials
-  }, [materials]);
+    let filtered = materials.filter(material => {
+      const matchesSearch = searchTerm === '' || 
+        material.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        material.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        material.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        material.supplier.toLowerCase().includes(searchTerm.toLowerCase());
+
+      const matchesCategory = filters.categories.length === 0 || filters.categories.includes(material.category);
+      const matchesSupplier = filters.suppliers.length === 0 || filters.suppliers.includes(material.supplier);
+      const matchesLowStock = !filters.lowStock || material.currentStock <= material.minStock;
+
+      return matchesSearch && matchesCategory && matchesSupplier && matchesLowStock;
+    });
+
+    // Sort materials
+    filtered.sort((a, b) => {
+      let aValue: any = a[sortField];
+      let bValue: any = b[sortField];
+
+      if (sortField === 'createdAt') {
+        aValue = new Date(aValue || 0).getTime();
+        bValue = new Date(bValue || 0).getTime();
+      }
+
+      if (typeof aValue === 'string') {
+        aValue = aValue.toLowerCase();
+        bValue = bValue.toLowerCase();
+      }
+
+      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return filtered;
+  }, [materials, searchTerm, sortField, sortDirection, filters]);
+
+  const updateSort = (field: typeof sortField) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
 
   // Clear error
   const clearError = () => setError(null);
 
   return {
     materials: filteredAndSortedMaterials,
+    allMaterials: materials,
     loading,
     error,
+    searchTerm,
+    setSearchTerm,
+    sortField,
+    sortDirection,
+    updateSort,
+    filters,
+    setFilters,
+    categories,
     addMaterial,
     updateMaterial,
     deleteMaterial,
