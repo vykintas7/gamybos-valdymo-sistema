@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, LoginCredentials, CreateUserData } from '../types/auth';
+import { supabase } from '../lib/supabase';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -18,8 +19,8 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const STORAGE_KEY = 'auth_data';
-const USERS_KEY = 'users_data';
 
+// Mock users for demo - in production, these would be in Supabase
 const mockUsers: User[] = [
   {
     id: '1',
@@ -84,164 +85,208 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [users, setUsers] = useState<User[]>(() => {
-    try {
-      const saved = localStorage.getItem(USERS_KEY);
-      return saved ? JSON.parse(saved) : mockUsers;
-    } catch {
-      return mockUsers;
-    }
-  });
+  const [users, setUsers] = useState<User[]>(mockUsers);
 
   // Initialize auth state from localStorage
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.isAuthenticated && parsed.currentUser && parsed.currentUser.isActive) {
+        const authData = JSON.parse(saved);
+        if (authData.isAuthenticated && authData.currentUser) {
           setIsAuthenticated(true);
-          setCurrentUser(parsed.currentUser);
+          setCurrentUser(authData.currentUser);
         }
       }
     } catch (error) {
-      console.error('Error loading auth state:', error);
+      console.error('Error loading auth data:', error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   // Save auth state to localStorage
-  useEffect(() => {
-    if (!loading) {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({
-          isAuthenticated,
-          currentUser
-        }));
-      } catch (error) {
-        console.error('Error saving auth state:', error);
-      }
-    }
-  }, [isAuthenticated, currentUser, loading]);
-
-  // Save users to localStorage
-  useEffect(() => {
+  const saveAuthState = (authenticated: boolean, user: User | null) => {
     try {
-      localStorage.setItem(USERS_KEY, JSON.stringify(users));
+      const authData = {
+        isAuthenticated: authenticated,
+        currentUser: user
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(authData));
     } catch (error) {
-      console.error('Error saving users:', error);
+      console.error('Error saving auth data:', error);
     }
-  }, [users]);
+  };
 
   const login = async (credentials: LoginCredentials): Promise<boolean> => {
-    setLoading(true);
-    setError(null);
-
     try {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      setLoading(true);
+      setError(null);
 
-     console.log('Attempting login with:', credentials);
-     console.log('Available users:', users.map(u => ({ username: u.username, email: u.email, isActive: u.isActive })));
-
+      // Find user by username or email
       const user = users.find(u => 
-        (u.username.toLowerCase() === credentials.usernameOrEmail.toLowerCase() || 
-         u.email.toLowerCase() === credentials.usernameOrEmail.toLowerCase()) &&
+        (u.username === credentials.username || u.email === credentials.username) &&
         u.password === credentials.password &&
         u.isActive
       );
 
-     console.log('Found user:', user ? { id: user.id, username: user.username, email: user.email } : 'Not found');
-
-      if (user) {
-        const updatedUser = { ...user, lastLogin: new Date().toISOString() };
-        setUsers(prev => prev.map(u => u.id === user.id ? updatedUser : u));
-        setCurrentUser(updatedUser);
-        setIsAuthenticated(true);
-        setLoading(false);
-        return true;
-      } else {
-        setError('Neteisingas vartotojo vardas/el. paštas arba slaptažodis');
-        setLoading(false);
+      if (!user) {
+        setError('Neteisingas vartotojo vardas arba slaptažodis');
         return false;
       }
-    } catch (error) {
-      setError('Prisijungimo klaida. Bandykite dar kartą.');
-      setLoading(false);
+
+      // Update last login in Supabase (if user exists in DB)
+      try {
+        await supabase
+          .from('users')
+          .update({ last_login: new Date().toISOString() })
+          .eq('email', user.email);
+      } catch (dbError) {
+        console.log('User not in database yet, using mock data');
+      }
+
+      setIsAuthenticated(true);
+      setCurrentUser(user);
+      saveAuthState(true, user);
+      
+      return true;
+    } catch (err) {
+      console.error('Login error:', err);
+      setError('Prisijungimo klaida');
       return false;
+    } finally {
+      setLoading(false);
     }
   };
 
   const logout = () => {
     setIsAuthenticated(false);
     setCurrentUser(null);
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch (error) {
-      console.error('Error removing auth data:', error);
-    }
+    saveAuthState(false, null);
+    localStorage.removeItem(STORAGE_KEY);
   };
 
   const createUser = (userData: CreateUserData): string | null => {
-    console.log('Creating user with data:', userData);
-    
-    if (!currentUser || currentUser.role !== 'Admin') {
-      console.log('Access denied: not admin');
-      setError('Tik administratoriai gali kurti vartotojus');
+    try {
+      // Check if username or email already exists
+      const existingUser = users.find(u => 
+        u.username === userData.username || u.email === userData.email
+      );
+
+      if (existingUser) {
+        setError('Vartotojo vardas arba el. paštas jau egzistuoja');
+        return null;
+      }
+
+      const newUser: User = {
+        id: Date.now().toString(),
+        username: userData.username,
+        email: userData.email,
+        password: userData.password,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        role: userData.role,
+        department: userData.department,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        lastLogin: null,
+        createdBy: currentUser?.id || 'system'
+      };
+
+      setUsers(prev => [...prev, newUser]);
+      
+      // Try to save to Supabase
+      supabase
+        .from('users')
+        .insert([{
+          username: newUser.username,
+          email: newUser.email,
+          password_hash: newUser.password, // In production, this should be hashed
+          first_name: newUser.firstName,
+          last_name: newUser.lastName,
+          role: newUser.role,
+          department: newUser.department,
+          is_active: newUser.isActive,
+          created_by: newUser.createdBy
+        }])
+        .then(({ error }) => {
+          if (error) {
+            console.error('Error saving user to Supabase:', error);
+          }
+        });
+
+      return newUser.id;
+    } catch (err) {
+      console.error('Error creating user:', err);
+      setError('Nepavyko sukurti vartotojo');
       return null;
     }
-
-    const existingUser = users.find(u => 
-      u.username === userData.username || u.email === userData.email
-    );
-
-    if (existingUser) {
-      console.log('User already exists:', existingUser);
-      setError('Vartotojas su tokiu vardu arba el. paštu jau egzistuoja');
-      return null;
-    }
-
-    const newUser: User = {
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-      ...userData,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      createdBy: currentUser.id
-    };
-
-    console.log('New user created:', newUser);
-    setUsers(prev => [...prev, newUser]);
-    setError(null); // Clear any previous errors
-    return newUser.id;
   };
 
   const updateUser = (userId: string, updates: Partial<User>): boolean => {
-    if (!currentUser || currentUser.role !== 'Admin') {
+    try {
+      setUsers(prev => prev.map(user => 
+        user.id === userId 
+          ? { ...user, ...updates }
+          : user
+      ));
+
+      // Try to update in Supabase
+      supabase
+        .from('users')
+        .update({
+          username: updates.username,
+          email: updates.email,
+          first_name: updates.firstName,
+          last_name: updates.lastName,
+          role: updates.role,
+          department: updates.department,
+          is_active: updates.isActive
+        })
+        .eq('id', userId)
+        .then(({ error }) => {
+          if (error) {
+            console.error('Error updating user in Supabase:', error);
+          }
+        });
+
+      return true;
+    } catch (err) {
+      console.error('Error updating user:', err);
+      setError('Nepavyko atnaujinti vartotojo');
       return false;
     }
-
-    setUsers(prev => prev.map(user => 
-      user.id === userId ? { ...user, ...updates } : user
-    ));
-    return true;
   };
 
   const deleteUser = (userId: string): boolean => {
-    if (!currentUser || currentUser.role !== 'Admin') {
+    try {
+      if (userId === currentUser?.id) {
+        setError('Negalite ištrinti savo paties paskyros');
+        return false;
+      }
+
+      setUsers(prev => prev.filter(user => user.id !== userId));
+
+      // Try to delete from Supabase
+      supabase
+        .from('users')
+        .delete()
+        .eq('id', userId)
+        .then(({ error }) => {
+          if (error) {
+            console.error('Error deleting user from Supabase:', error);
+          }
+        });
+
+      return true;
+    } catch (err) {
+      console.error('Error deleting user:', err);
+      setError('Nepavyko ištrinti vartotojo');
       return false;
     }
-
-    if (userId === currentUser.id) {
-      return false;
-    }
-
-    setUsers(prev => prev.filter(user => user.id !== userId));
-    return true;
   };
 
-
-  const clearError = () => {
-    setError(null);
-  };
+  const clearError = () => setError(null);
 
   const value: AuthContextType = {
     isAuthenticated,
@@ -271,3 +316,4 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
+

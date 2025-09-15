@@ -1,58 +1,62 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Client, ClientFormData, ClientSortField, ClientSortDirection, ClientFilterOptions } from '../types/client';
-
-// Mock data for demonstration
-const mockClients: Client[] = [
-  {
-    id: '1',
-    name: 'UAB "Grožio namai"',
-    code: 'GN001',
-    email: 'info@grozionamai.lt',
-    phone: '+370 600 12345',
-    address: 'Vilniaus g. 123, Vilnius',
-    contactPerson: 'Rasa Petraitienė',
-    notes: 'Specializuojasi natūralios kosmetikos gamyboje',
-    createdAt: '2024-01-10T08:00:00Z',
-    updatedAt: '2024-12-01T10:30:00Z',
-    status: 'active'
-  },
-  {
-    id: '2',
-    name: 'SPA centras "Harmonija"',
-    code: 'HAR002',
-    email: 'uzsakymai@harmonija.lt',
-    phone: '+370 650 98765',
-    address: 'Gedimino pr. 45, Kaunas',
-    contactPerson: 'Mindaugas Kazlauskas',
-    notes: 'Prabangūs SPA produktai ir procedūros',
-    createdAt: '2024-02-15T14:20:00Z',
-    updatedAt: '2024-11-28T16:45:00Z',
-    status: 'active'
-  },
-  {
-    id: '3',
-    name: 'Kosmetikos studija "Bella"',
-    code: 'BEL003',
-    email: 'bella@kosmetika.lt',
-    phone: '+370 620 55555',
-    address: 'Laisvės al. 78, Kaunas',
-    contactPerson: 'Elena Jonaitienė',
-    notes: 'Individualūs kosmetikos sprendimai',
-    createdAt: '2024-03-20T11:15:00Z',
-    updatedAt: '2024-12-01T09:20:00Z',
-    status: 'active'
-  }
-];
+import { supabase } from '../lib/supabase';
 
 export const useClients = () => {
-  const [clients, setClients] = useState<Client[]>(mockClients);
-  const [loading, setLoading] = useState(false);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<ClientSortField>('name');
   const [sortDirection, setSortDirection] = useState<ClientSortDirection>('asc');
   const [filters, setFilters] = useState<ClientFilterOptions>({
     status: []
   });
+
+  // Load clients from Supabase
+  const loadClients = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error loading clients:', error);
+        setError('Nepavyko įkelti klientų');
+        return;
+      }
+
+      // Transform Supabase data to match our Client type
+      const transformedClients: Client[] = (data || []).map(item => ({
+        id: item.id,
+        name: item.name,
+        code: item.code,
+        email: item.email || '',
+        phone: item.phone || '',
+        address: item.address || '',
+        contactPerson: item.contact_person || '',
+        notes: item.notes || '',
+        createdAt: item.created_at,
+        updatedAt: item.updated_at,
+        status: item.status || 'active'
+      }));
+
+      setClients(transformedClients);
+      setError(null);
+    } catch (err) {
+      console.error('Error loading clients:', err);
+      setError('Nepavyko įkelti klientų');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load clients on component mount
+  useEffect(() => {
+    loadClients();
+  }, []);
 
   const filteredAndSortedClients = useMemo(() => {
     let filtered = clients.filter(client => {
@@ -90,27 +94,96 @@ export const useClients = () => {
     return filtered;
   }, [clients, searchTerm, sortField, sortDirection, filters]);
 
-  const addClient = (clientData: ClientFormData) => {
-    const newClient: Client = {
-      id: Date.now().toString(),
-      ...clientData,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    setClients(prev => [...prev, newClient]);
-    return newClient.id;
+  // Add new client
+  const addClient = async (clientData: ClientFormData): Promise<string> => {
+    try {
+      const newClient = {
+        name: clientData.name,
+        code: clientData.code,
+        email: clientData.email,
+        phone: clientData.phone,
+        address: clientData.address,
+        contact_person: clientData.contactPerson,
+        notes: clientData.notes,
+        status: 'active'
+      };
+
+      const { data, error } = await supabase
+        .from('clients')
+        .insert([newClient])
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error adding client:', error);
+        setError('Nepavyko pridėti kliento');
+        throw new Error(error.message);
+      }
+
+      // Reload clients to get updated list
+      await loadClients();
+      return data.id;
+    } catch (err) {
+      console.error('Error adding client:', err);
+      setError('Nepavyko pridėti kliento');
+      throw err;
+    }
   };
 
-  const updateClient = (id: string, clientData: Partial<ClientFormData>) => {
-    setClients(prev => prev.map(client => 
-      client.id === id 
-        ? { ...client, ...clientData, updatedAt: new Date().toISOString() }
-        : client
-    ));
+  // Update client
+  const updateClient = async (id: string, clientData: Partial<ClientFormData>): Promise<void> => {
+    try {
+      const updateData: any = {};
+      
+      if (clientData.name !== undefined) updateData.name = clientData.name;
+      if (clientData.code !== undefined) updateData.code = clientData.code;
+      if (clientData.email !== undefined) updateData.email = clientData.email;
+      if (clientData.phone !== undefined) updateData.phone = clientData.phone;
+      if (clientData.address !== undefined) updateData.address = clientData.address;
+      if (clientData.contactPerson !== undefined) updateData.contact_person = clientData.contactPerson;
+      if (clientData.notes !== undefined) updateData.notes = clientData.notes;
+
+      const { error } = await supabase
+        .from('clients')
+        .update(updateData)
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error updating client:', error);
+        setError('Nepavyko atnaujinti kliento');
+        throw new Error(error.message);
+      }
+
+      // Reload clients to get updated list
+      await loadClients();
+    } catch (err) {
+      console.error('Error updating client:', err);
+      setError('Nepavyko atnaujinti kliento');
+      throw err;
+    }
   };
 
-  const deleteClient = (id: string) => {
-    setClients(prev => prev.filter(client => client.id !== id));
+  // Delete client
+  const deleteClient = async (id: string): Promise<void> => {
+    try {
+      const { error } = await supabase
+        .from('clients')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error deleting client:', error);
+        setError('Nepavyko ištrinti kliento');
+        throw new Error(error.message);
+      }
+
+      // Reload clients to get updated list
+      await loadClients();
+    } catch (err) {
+      console.error('Error deleting client:', err);
+      setError('Nepavyko ištrinti kliento');
+      throw err;
+    }
   };
 
   const updateSort = (field: ClientSortField) => {
@@ -122,10 +195,14 @@ export const useClients = () => {
     }
   };
 
+  // Clear error
+  const clearError = () => setError(null);
+
   return {
     clients: filteredAndSortedClients,
     allClients: clients,
     loading,
+    error,
     searchTerm,
     setSearchTerm,
     sortField,
@@ -135,6 +212,8 @@ export const useClients = () => {
     setFilters,
     addClient,
     updateClient,
-    deleteClient
+    deleteClient,
+    clearError,
+    refreshClients: loadClients
   };
 };
